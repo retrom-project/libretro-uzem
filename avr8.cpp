@@ -791,7 +791,7 @@ inline void avr8::update_hardware_ins()
 			//reset watchdog
 			//watchdog is based on a RC oscillator
 			//so add some random variation to simulate entropy
-			watchdogTimer=rand()%1024;
+			watchdogTimer=nextRandom()%1024;
 		}
 	}
 
@@ -1759,7 +1759,7 @@ unsigned int avr8::exec()
 		case  86: // 1001 0101 1010 1000		(1) WDR
 			//watchdog is based on a RC oscillator
 			//so add some random variation to simulate entropy
-			watchdogTimer=rand()%1024;
+			watchdogTimer=nextRandom()%1024;
 			if(prevWDR){
 				printf("WDR measured %u cycles\n", cycleCounter - prevWDR);
 				prevWDR = 0;
@@ -1838,7 +1838,7 @@ void avr8::instructionDecode(u16 address){
 			arg2 = (decodeArg(rawFlash, instructionList[i].arg2Mask, instructionList[i].arg2Neg) * instructionList[i].arg2Mul) + instructionList[i].arg2Offset;
 
 			if (instructionList[i].words == 2) { // the 2 word instructions have k16 as the 2nd word of total 32bit instruction
-				arg2 = progmem[address+1];
+				arg2 = progmem[(address + 1) % (progSize / 2)];
 			}
 
 			//fprintf(stdout, instructionList[i].opName, arg1, arg2);
@@ -2099,6 +2099,14 @@ char ascii(unsigned char ch){
 #endif
 
 void avr8::update_spi(){
+#ifdef __LIBRETRO__
+    // Standalone cartridges have no mounted SD card: MISO remains high.
+    if (!SDpath) {
+        SPDR = 0xff;
+        spiState = SPI_IDLE_STATE;
+        return;
+    }
+#endif
     // SPI state machine
     switch(spiState){
     case SPI_IDLE_STATE:

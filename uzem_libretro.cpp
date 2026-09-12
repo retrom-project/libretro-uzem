@@ -28,18 +28,21 @@ THE SOFTWARE.
 #include "uzem.h"
 #include "avr8.h"
 #include "uzerom.h"
+#include "uzem_state.h"
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <time.h>
+#include <new>
+#include <vector>
 #include <retro_dirent.h>
 #include <vfs/vfs_implementation.h>
 #include <streams/file_stream.h>
 #include <retro_endianness.h>
 
 avr8 uzebox;
-static char sd_path[4096];
+static uint32_t cartridge_id;
 
 extern audio_driver_t audio_driver_libretro;
 extern input_driver_t input_driver_libretro;
@@ -81,6 +84,8 @@ unsigned retro_api_version(void)
 
 void retro_init(void)
 {
+    uzebox.~avr8();
+    new (&uzebox) avr8();
 	uzebox.adrv = &audio_driver_libretro;
 	uzebox.idrv = &input_driver_libretro;
 	uzebox.vdrv = &video_driver_libretro;
@@ -94,6 +99,9 @@ void retro_init(void)
 
 void retro_deinit(void)
 {
+    free(framebuffer); framebuffer = NULL;
+    uzebox.vdrv->framebuffer = NULL;
+    uzebox.idrv->buttons[0] = uzebox.idrv->buttons[1] = ~0U;
 }
 
 void retro_set_controller_port_device(unsigned port, unsigned device)
@@ -120,16 +128,6 @@ static retro_audio_sample_batch_t audio_batch_cb;
 static retro_environment_t environ_cb;
 retro_input_poll_t input_poll_cb;
 retro_input_state_t input_state_cb;
-
-typedef struct cpu_state_buf {
-	uint16_t pc, currentPc;
-	unsigned cycleCounter, elapsedCycles,prevCyclesCounter,elapsedCyclesSleep,lastCyclesSleep;
-	unsigned prevPortB, prevWDR, watchdogTimer;
-	int scanline_top;
-	unsigned left_edge_cycle, left_edge;
-} cpu_state_buf_t;
-
-static cpu_state_buf_t cpu_state_buf;
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
 {
@@ -182,14 +180,8 @@ void retro_set_environment(retro_environment_t cb)
 
 	cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*) ports);
 
-	char *dir = NULL;
-	if (cb(RETRO_ENVIRONMENT_GET_CORE_ASSETS_DIRECTORY, &dir)) {
-		if (dir != NULL) {
-			strncpy(sd_path, dir, sizeof(sd_path));
-			uzebox.SDpath = &sd_path[0];
-			uzebox.init_sd();
-		}
-	}
+	// This target accepts standalone cartridges; no host SD directory is mounted.
+
 }
 
 void retro_set_audio_sample(retro_audio_sample_t cb)
@@ -219,6 +211,14 @@ void retro_set_video_refresh(retro_video_refresh_t cb)
 
 void retro_reset(void)
 {
+    std::vector<uint16_t> program(uzebox.progmem, uzebox.progmem + progSize / 2);
+    std::vector<uint8_t> eeprom(uzebox.eeprom, uzebox.eeprom + eepromSize);
+    retro_init();
+    memcpy(uzebox.progmem, program.data(), sizeof(uzebox.progmem));
+    memcpy(uzebox.eeprom, eeprom.data(), sizeof(uzebox.eeprom));
+    uzebox.rngState = cartridge_id ? cartridge_id : 1;
+    uzebox.decodeFlash();
+    if (framebuffer) memset(framebuffer, 0, sizeof(uint32_t) * 720 * 224);
 }
 
 static void audio_set_state(bool enable)
@@ -228,6 +228,7 @@ static void audio_set_state(bool enable)
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+    if (framebuffer) return false;
 	struct retro_input_descriptor desc[] = {
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT, "Left"},
 		{ 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP, "Up"},
@@ -251,7 +252,7 @@ bool retro_load_game(const struct retro_game_info *info)
 		return false;
 	}
 
-	if (info->size <= HEADER_SIZE) {
+	if (!info || !info->data || info->size <= HEADER_SIZE) {
 		return false;
 	}
 
@@ -260,6 +261,8 @@ bool retro_load_game(const struct retro_game_info *info)
 	}
 
 	RomHeader *header = (RomHeader *)info->data;
+    if (header->version != 1 || header->target != 0 || header->mouse != 0) return false;
+    cartridge_id = uzem_state_hash(static_cast<const uint8_t*>(info->data), info->size);
 	if (info->size != HEADER_SIZE + retro_le_to_cpu32(header->progSize)
 		|| retro_le_to_cpu32(header->progSize) > sizeof (uzebox.progmem)) {
 		return false;
@@ -270,7 +273,8 @@ bool retro_load_game(const struct retro_game_info *info)
 		printf("Mouse support enabled\n");
 	}
 
-	uint8_t *buffer = (uint8_t *)info->data;
+	memset(uzebox.progmem, 0, sizeof(uzebox.progmem));
+    uint8_t *buffer = (uint8_t *)info->data;
 #if RETRO_IS_LITTLE_ENDIAN
 	memcpy((unsigned char*)(uzebox.progmem), buffer + HEADER_SIZE, retro_le_to_cpu32(header->progSize));
 #elif RETRO_IS_BIG_ENDIAN
@@ -285,14 +289,14 @@ bool retro_load_game(const struct retro_game_info *info)
 #error Wrong endianness headers
 #endif
 
-	framebuffer = (uint32_t *)malloc(sizeof(uint32_t) * 720 * 224);
+	framebuffer = (uint32_t *)calloc(720 * 224, sizeof(uint32_t));
+    if (!framebuffer) return false;
 
 	uzebox.decodeFlash();
 	strncpy(uzebox.romName, "ROM", sizeof(uzebox.romName));
 
 	uzebox.enableSound = true;
-	uzebox.randomSeed=time(NULL);
-	srand(uzebox.randomSeed);	//used for the watchdog timer entropy
+	uzebox.rngState = cartridge_id ? cartridge_id : 1;
 
 	return true;
 }
@@ -346,59 +350,12 @@ void retro_unload_game(void)
 	framebuffer = NULL;
 }
 
-size_t retro_serialize_size(void)
-{
-	return sizeof(cpu_state_buf) + sizeof(uzebox.r) + sizeof(uzebox.io) + sizeof(uzebox.sram);
+size_t retro_serialize_size(void) { return uzem_state_size(); }
+bool retro_serialize(void *data, size_t size) {
+    return uzem_state_save(uzebox, cartridge_id, data, size);
 }
-
-bool retro_serialize(void *data, size_t size)
-{
-	cpu_state_buf.pc = uzebox.pc;
-	cpu_state_buf.currentPc = uzebox.currentPc;
-	cpu_state_buf.scanline_top = uzebox.scanline_top;
-	cpu_state_buf.left_edge_cycle = uzebox.left_edge_cycle;
-	cpu_state_buf.left_edge = uzebox.left_edge;
-
-	uint8_t *buf = (uint8_t *)data;
-	int len = sizeof(cpu_state_buf) + sizeof(uzebox.r) + sizeof(uzebox.io) + sizeof(uzebox.sram);
-	if (size >= len) {
-		memcpy(buf, &cpu_state_buf, sizeof(cpu_state_buf));
-		buf += sizeof(cpu_state_buf);
-		memcpy(buf, &uzebox.r[0], sizeof(uzebox.r));
-		buf += sizeof(uzebox.r);
-		memcpy(buf, &uzebox.io[0], sizeof(uzebox.io));
-		buf += sizeof(uzebox.io);
-		memcpy(buf, &uzebox.sram[0], sizeof(uzebox.sram));
-
-		return true;
-	}
-
-	return false;
-}
-
-bool retro_unserialize(const void *data, size_t size)
-{
-	uint8_t *buf = (uint8_t *)data;
-	int len = sizeof(cpu_state_buf) + sizeof(uzebox.r) + sizeof(uzebox.io) + sizeof(uzebox.sram);
-
-	if (size >= len) {
-		memcpy(&cpu_state_buf, buf, sizeof(cpu_state_buf));
-		buf += sizeof(cpu_state_buf);
-		memcpy(&uzebox.r[0], buf, sizeof(uzebox.r));
-		buf += sizeof(uzebox.r);
-		memcpy(&uzebox.io[0], buf, sizeof(uzebox.io));
-		buf += sizeof(uzebox.io);
-		memcpy(&uzebox.sram[0], buf, sizeof(uzebox.sram));
-
-		uzebox.pc = cpu_state_buf.pc;
-		uzebox.currentPc = cpu_state_buf.currentPc;
-		uzebox.scanline_top = cpu_state_buf.scanline_top;
-		uzebox.left_edge_cycle = cpu_state_buf.left_edge_cycle;
-		uzebox.left_edge = cpu_state_buf.left_edge;
-
-		return true;
-	}
-	return false;
+bool retro_unserialize(const void *data, size_t size) {
+    return uzem_state_load(uzebox, cartridge_id, data, size);
 }
 
 void *retro_get_memory_data(unsigned id)
