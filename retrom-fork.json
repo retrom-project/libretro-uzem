@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "forkRepository": "https://github.com/retrom-project/libretro-uzem",
+  "defaultBranch": "retrom/gd991ee94547c",
+  "upstreamMirrorBranch": "master",
+  "upstreams": [
+    {
+      "role": "emulatorjs-core",
+      "repository": "https://github.com/libretro/libretro-uzem",
+      "refType": "COMMIT",
+      "ref": "d991ee94547c8294abc1c4cb73d63116aa58b5bc",
+      "commit": "d991ee94547c8294abc1c4cb73d63116aa58b5bc"
+    },
+    {
+      "role": "emulatorjs-retroarch-linker",
+      "repository": "https://github.com/EmulatorJS/RetroArch",
+      "refType": "COMMIT",
+      "ref": "6dd4353937ef48b6ec0bfbdbb15d1c5992d86927",
+      "commit": "6dd4353937ef48b6ec0bfbdbb15d1c5992d86927"
+    }
+  ],
+  "adapterAbi": "emulatorjs-state-v1",
+  "releaseAssets": [
+    "uzem-wasm.data",
+    "LICENSE",
+    "source.tar.gz",
+    "rpg-runtime-release.json"
+  ]
+}

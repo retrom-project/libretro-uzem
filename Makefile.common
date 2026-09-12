@@ -6,6 +6,7 @@ SOURCES_CXX := \
 					$(CORE_DIR)/input_driver_libretro.cpp \
 					$(CORE_DIR)/SDEmulator.cpp \
 					$(CORE_DIR)/uzem_libretro.cpp \
+                    $(CORE_DIR)/uzem_state.cpp \
 					$(CORE_DIR)/video_driver_libretro.cpp
 
 ifneq ($(STATIC_LINKING), 1)

@@ -209,6 +209,12 @@ struct SDPartitionEntry{
 
 struct avr8
 {
+    friend struct UzemStateAccess;
+    unsigned int rngState = 0x6d2b79f5U;
+    unsigned int nextRandom() {
+        rngState ^= rngState << 13; rngState ^= rngState >> 17; rngState ^= rngState << 5;
+        return rngState;
+    }
 	avr8() :
 		/*Core*/
 		pc(0), watchdogTimer(0), prevPortB(0), prevWDR(0), eepromFile("eeprom.bin"),enableGdb(false),
@@ -255,6 +261,13 @@ struct avr8
 		emulatedMBR(0),SDpath(NULL)
 
 	{
+        currentPc = elapsedCycles = prevCyclesCounter = lastCyclesSleep = cycle_ctr_ins = 0;
+        T16_latch = dly_TCCR1B = dly_TCNT1L = dly_TCNT1H = 0;
+        scanline_count = -999; scanline_top = -38; left_edge_cycle = 0; left_edge = VIDEO_LEFT_EDGE;
+        pixel_raw = 0; latched_buttons[0] = latched_buttons[1] = ~0U;
+        spiCycleWait = spiCommand = spiCommandDelay = spiArg = spiByteCount = 0;
+        memset(scanline_buf, 0, sizeof(scanline_buf));
+        memset(spiResponseBuffer, 0, sizeof(spiResponseBuffer));
 		memset(r, 0, sizeof(r));
 		memset(io, 0, sizeof(io));
 		memset(sram, 0, sizeof(sram));
